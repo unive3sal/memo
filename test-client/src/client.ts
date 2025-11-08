@@ -1,8 +1,11 @@
 import {
     Connection,
     Keypair,
+    LAMPORTS_PER_SOL,
     PublicKey,
+    sendAndConfirmTransaction,
     SystemProgram,
+    Transaction,
     TransactionInstruction
 } from '@solana/web3.js';
 import * as borsh from 'borsh'
@@ -61,6 +64,7 @@ class MemoInstructionData implements MemoInstruction {
             };
             return borsh.serialize(schema, this);
         }
+    }
 }
 
 class MemoData {
@@ -95,7 +99,7 @@ async function createMemo(
     user: Keypair,
     content: string,
 ) {
-    const [memoPda, bump] = await PublicKey.findProgramAddress(
+    const [memoPda, _] = await PublicKey.findProgramAddress(
         [
             Buffer.from('memo'),
             user.publicKey.toBuffer()
@@ -107,7 +111,7 @@ async function createMemo(
 
     const memoInstrData = new MemoInstructionData(
         MemoInstructionType.Create,
-        'init content',
+        content,
     );
     const serializedData = memoInstrData.serialize();
 
@@ -129,7 +133,54 @@ async function createMemo(
                 isWritable: false,
             },
         ],
-        programId,
-        serializedData
+        programId: programId,
+        data: Buffer.from(serializedData),
     });
+
+    const transactions = new Transaction().add(instruction);
+    const signature = await sendAndConfirmTransaction(
+        connection,
+        transactions,
+        [user],
+    );
+
+    console.log('Transaction signature: ', signature);
 }
+
+async function main() {
+    // connect with local solana chain
+    const connect = new Connection(
+        'http://127.0.0.1:8899',
+        'confirmed'
+    );
+    const programId = new PublicKey('9MmgBLZf5wEYbrMwp37o3SGP3r7fXfB5dZWigMYeGkLc');
+    const user = Keypair.generate();
+
+    // request 10 SOL airdrop from local chain
+    try {
+        const airdropSignature = await connect.requestAirdrop(
+            user.publicKey,
+            10 * LAMPORTS_PER_SOL
+        );
+
+        await connect.confirmTransaction(airdropSignature);
+
+        console.log('Airdrop successful, signature: ${signature}');
+    } catch (err) {
+        console.log('Airdrop failed, exit!');
+        return;
+    }
+
+    // create a memo
+    createMemo(
+        connect,
+        programId,
+        user,
+        'init memo'
+    );
+
+    // TODO: read created memo
+
+}
+
+main();
