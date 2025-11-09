@@ -37,11 +37,6 @@ pub fn create_memo(
     let user_account = next_account_info(accounts_itr)?;    // the user who own memo
     let system_account = next_account_info(accounts_itr)?;
 
-    // verify program ID, all of the memo account should be owned by program
-    if memo_account.owner != program_id {
-        return Err(ProgramError::IncorrectProgramId);
-    }
-
     // verify client signature
     if !user_account.is_signer {
         return Err(ProgramError::MissingRequiredSignature);
@@ -60,7 +55,9 @@ pub fn create_memo(
 
     // if memo_account is already exist
     if memo_account.lamports() > 0 {
-        return Err(ProgramError::AccountAlreadyInitialized);
+        msg!("Account already exist, update memo");
+        update_memo(program_id, accounts, content)?;
+        return Ok(());
     }
 
     let memo = Memo{
@@ -68,22 +65,27 @@ pub fn create_memo(
         content: content,
         timestamp: Clock::get()?.unix_timestamp,
     };
-    let memo_space = std::mem::size_of_val(&memo);
-    let lamports = Rent::get()?.minimum_balance(memo_space);
+    let serialized_memo = borsh::to_vec(&memo)?;
+    let memo_space = serialized_memo.len();
+    msg!("Required space: {} bytes", memo_space);
 
-    // if balance is not enough
-    if lamports > user_account.lamports() {
+    // if it exceeds max memo len
+    if memo_space > super::state::MAX_MEMO_SIZE {
         return Err(
-            ProgramError::from(MemoError::InsufficientBalance)
+            ProgramError::from(MemoError::ExceedMaxMemoLen)
         );
     }
 
+    let lamports = Rent::get()?.minimum_balance(super::state::MAX_MEMO_SIZE);
+    msg!("Required lamports: {}", lamports);
+
+    // lamports will be automatically calculated
     invoke_signed(
         &system_instruction::create_account(
             user_account.key,
             memo_account.key,
             lamports,
-            memo_space as u64,
+            super::state::MAX_MEMO_SIZE as u64,
             program_id
         ), 
         &[
@@ -97,13 +99,6 @@ pub fn create_memo(
             &[bump_seed]
         ]]
     )?;
-
-    let user_lamports = user_account.lamports();
-    let memo_lamports = memo_account.lamports();
-    **user_account.lamports.borrow_mut() = user_lamports
-        .checked_sub(memo_lamports)
-        .ok_or(ProgramError::ArithmeticOverflow)?;
-
 
     memo.serialize(&mut &mut memo_account.data.borrow_mut()[..])?;
 
@@ -146,31 +141,19 @@ pub fn update_memo(
     }
 
     // verify lamports
-    let legacy_lamport = memo_account.lamports();
     let update_memo = Memo {
         content: update_content,
         timestamp: Clock::get()?.unix_timestamp,
         ..memo
     };
-    let update_memo_space = std::mem::size_of_val(&update_memo);
-    let update_lamport = Rent::get()?.minimum_balance(update_memo_space);
-    if update_lamport > legacy_lamport {
-        let delta_lamport = update_lamport
-            .checked_sub(legacy_lamport)
-            .ok_or(ProgramError::ArithmeticOverflow)?;
-        if delta_lamport > user_account.lamports() {
-            return Err(ProgramError::from(MemoError::InsufficientBalance));
-        }
-        **user_account.lamports.borrow_mut() = user_account.lamports()
-            .checked_sub(delta_lamport)
-            .ok_or(ProgramError::ArithmeticOverflow)?;
-    } else {
-        let delta_lamport = legacy_lamport
-            .checked_sub(update_lamport)
-            .ok_or(ProgramError::ArithmeticOverflow)?;
-        **user_account.lamports.borrow_mut() = user_account.lamports()
-            .checked_add(delta_lamport)
-            .ok_or(ProgramError::ArithmeticOverflow)?;
+    let serialized_update_memo = borsh::to_vec(&update_memo)?;
+    let update_memo_space = serialized_update_memo.len();
+
+    // if it exceeds max len limit
+    if update_memo_space > super::state::MAX_MEMO_SIZE {
+        return Err(
+            ProgramError::from(MemoError::ExceedMaxMemoLen)
+        );
     }
 
     memo.serialize(&mut &mut memo_account.data.borrow_mut()[..])?;

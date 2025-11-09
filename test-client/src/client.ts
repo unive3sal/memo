@@ -41,28 +41,21 @@ class MemoInstructionData implements MemoInstruction {
 
     serialize(): Uint8Array {
         if (this.content == undefined) {
-            let schema = {
-                enum: [
-                    {struct: {num: 'u8'}},
-                    {struct: {num: 'u8'}},
-                    {struct: {num: 'u8'}},
-                ],
-            };
-            return borsh.serialize(schema, this.instructionType);
+            return borsh.serialize('u8', this.instructionType);
         } else {
             let schema = {
                 struct: {
-                    instructionType: {
-                        enum: [
-                            {struct: {num: 'u8'}},
-                            {struct: {num: 'u8'}},
-                            {struct: {num: 'u8'}},
-                        ]
-                    },
+                    instructionType: 'u8',
                     content: 'string',
                 }
             };
-            return borsh.serialize(schema, this);
+            return borsh.serialize(
+                schema,
+                {
+                    instructionType: this.instructionType,
+                    content: this.content,
+                }
+            );
         }
     }
 }
@@ -88,8 +81,21 @@ class MemoData {
         }
     };
 
-    serialize(): Uint8Array {
-        return borsh.serialize(MemoData.schema, this);
+    static serialize(memo: MemoData): Uint8Array {
+        return borsh.serialize(MemoData.schema, memo);
+    }
+
+    static deserialize(data: Uint8Array): MemoData {
+        const memo = borsh.deserialize(
+            MemoData.schema,
+            data
+        ) as {
+            owner: Uint8Array,
+            content: string,
+            timestamp: bigint,
+        };
+
+        return memo;
     }
 }
 
@@ -149,21 +155,21 @@ async function createMemo(
 
 async function main() {
     // connect with local solana chain
-    const connect = new Connection(
+    const connection = new Connection(
         'http://127.0.0.1:8899',
         'confirmed'
     );
-    const programId = new PublicKey('9MmgBLZf5wEYbrMwp37o3SGP3r7fXfB5dZWigMYeGkLc');
+    const programId = new PublicKey('GPe2N5rSiU2QmJt7A7N5LwsAi31bjnHQQ56Er6aDvYpC');
     const user = Keypair.generate();
 
     // request 10 SOL airdrop from local chain
     try {
-        const airdropSignature = await connect.requestAirdrop(
+        const airdropSignature = await connection.requestAirdrop(
             user.publicKey,
-            10 * LAMPORTS_PER_SOL
+            10000 * LAMPORTS_PER_SOL
         );
 
-        await connect.confirmTransaction(airdropSignature);
+        await connection.confirmTransaction(airdropSignature);
 
         console.log('Airdrop successful, signature: ${signature}');
     } catch (err) {
@@ -173,14 +179,34 @@ async function main() {
 
     // create a memo
     createMemo(
-        connect,
+        connection,
         programId,
         user,
         'init memo'
     );
 
-    // TODO: read created memo
+    // TODO: read created memo via PDA
+    const [memoPda, _] = await PublicKey.findProgramAddress(
+        [
+            Buffer.from('memo'),
+            user.publicKey.toBuffer()
+        ],
+        programId
+    );
+    console.log("read from PDA: ", memoPda);
+    const memoInfo = await connection.getAccountInfo(memoPda);
+    if (!memoInfo) {
+        console.log('Memo account does not exist');
+        return
+    }
+    
+    console.log('Account found!');
+    console.log('Owner:', memoInfo.owner.toString());
+    console.log('Lamports:', memoInfo.lamports);
+    console.log('Data length:', memoInfo.data.length);
 
+    const readMemo = MemoData.deserialize(memoInfo.data);
+    console.log("Read memo content: ", readMemo.content);
 }
 
 main();

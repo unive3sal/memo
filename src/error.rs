@@ -8,6 +8,8 @@ pub enum MemoError {
     InsufficientBalance,
     #[error("user is not the owner of current memo")]
     OwnershipMismatch,
+    #[error("exceed max memo length")]
+    ExceedMaxMemoLen,
 }
 
 impl From<MemoError> for ProgramError {
@@ -25,6 +27,7 @@ impl PrintProgramError for MemoError{
         match self {
             MemoError::InsufficientBalance => msg!("Error: insufficient balance for current user"),
             MemoError::OwnershipMismatch => msg!("Error: user doesn't own memo"),
+            MemoError::ExceedMaxMemoLen => msg!("Error: user content exceeds max limit")
         }
     }
     
